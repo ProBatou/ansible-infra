@@ -7,8 +7,6 @@ groups:
   by_tag: proxmox_tags
 filters:
   - proxmox_status == 'running'
-  - proxmox_node == proxmox_node_filter
   - "'debian' in (proxmox_ostype | default('') | lower)"
-  - inventory_hostname not in proxmox_excluded_vms
 compose:
   ansible_host: proxmox_ipconfig0 | default('') | regex_search('ip=([0-9.]+)', '\\1') | default([]) | first | default('')
