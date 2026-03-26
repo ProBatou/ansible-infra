@@ -19,10 +19,12 @@ Ansible repository for managing Linux VMs in a single production environment usi
 ```
 ansible-infra/
 ├── ansible.cfg                # Ansible configuration (roles_path, inventory, defaults)
+├── requirements.yml           # Collection dependencies (community.general >= 7.0.0)
 ├── inventory/
-│   └── hosts.ini              # Host groups: [all], [web], [db], [docker_hosts]
+│   ├── hosts.ini              # Static host groups: [all], [web], [db], [docker_hosts]
+│   └── proxmox.yml            # Proxmox dynamic inventory plugin configuration
 ├── group_vars/
-│   ├── all.yml                # Common vars: ansible_user, ntp_servers, base_packages
+│   ├── all.yml                # Common vars: ansible_user, ntp_servers, base_packages, proxmox_*
 │   └── docker_hosts.yml       # Docker-specific vars
 ├── roles/
 │   ├── common/
@@ -103,10 +105,44 @@ Store the vault password in a file named `vault_pass` (excluded from git via `.g
 ansible-playbook -i inventory/hosts.ini playbooks/common.yml --vault-password-file vault_pass
 ```
 
+## Proxmox Dynamic Inventory
+
+This repository ships with a dynamic inventory plugin for Proxmox VE 7.x / 8.x powered by `community.general.proxmox`.
+
+### 1. Install the required collection
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+```
+
+### 2. Set the required variables
+
+| Variable           | Description                              |
+|--------------------|------------------------------------------|
+| `proxmox_url`      | Proxmox API URL, e.g. `https://pve:8006` |
+| `proxmox_user`     | Proxmox API user, e.g. `ansible@pam`     |
+| `proxmox_password` | Proxmox API password (**secret**)        |
+
+`proxmox_url` and `proxmox_user` can be set in `group_vars/all.yml` or passed with `-e`.  
+`proxmox_password` **must** be stored in Semaphore Variable Groups or encrypted with `ansible-vault` — never committed in plain text.
+
+### 3. Test the inventory locally
+
+```bash
+ansible-inventory -i inventory/proxmox.yml --list
+```
+
+### 4. Configure it in Semaphore UI
+
+1. Go to **Inventory** → **New Inventory**.
+2. Set **Type** to **File**.
+3. Set the path to `inventory/proxmox.yml`.
+4. Pass `proxmox_url`, `proxmox_user`, and `proxmox_password` via a **Variable Group** linked to the template.
+
 ## Semaphore UI
 
 1. Add this repository as a **Project** in Semaphore UI.
-2. Configure an **Inventory** pointing to `inventory/hosts.ini`.
+2. Configure an **Inventory** pointing to `inventory/hosts.ini` (static) or `inventory/proxmox.yml` (dynamic).
 3. Create **Task Templates** for each playbook (`common.yml`, `updates.yml`, `docker.yml`).
 4. Use **Schedules** for automated recurring updates.
 

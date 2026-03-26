@@ -14,3 +14,8 @@ base_packages:
   - curl
   - git
   - htop
+
+# Proxmox dynamic inventory variables — set per environment.
+# proxmox_password must be stored in Semaphore Variable Groups or ansible-vault.
+proxmox_url:
+proxmox_user:
