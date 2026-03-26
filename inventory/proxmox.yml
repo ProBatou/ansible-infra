@@ -9,4 +9,4 @@ filters:
   - proxmox_status == 'running'
   - "'debian' in (proxmox_ostype | default('') | lower)"
 compose:
-  ansible_host: proxmox_ipconfig0 | default('') | regex_search('ip=([0-9.]+)', '\\1') | default([]) | first | default('')
+  ansible_host: proxmox_agent_interfaces | default([]) | selectattr('name', 'ne', 'lo') | map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | map(attribute='ip-address') | first | default(inventory_hostname)
