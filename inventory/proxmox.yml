@@ -1,5 +1,5 @@
 ---
-plugin: community.general.proxmox
+plugin: community.proxmox.proxmox
 
 url: "{{ proxmox_url }}"
 user: "{{ proxmox_user }}"
