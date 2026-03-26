@@ -1,0 +1,14 @@
+# Ansible generated files
+*.retry
+*.log
+
+# Vault and secrets
+vault_pass
+group_vars/vault.yml
+.env
+
+# Editor and OS files
+.DS_Store
+*.swp
+*.swo
+*~

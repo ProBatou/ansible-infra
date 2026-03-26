@@ -1,0 +1,64 @@
+---
+# Common role: hostname, base packages, NTP, disable root SSH
+
+- name: Set system hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  tags: common
+
+- name: Install base packages on Debian/Ubuntu
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+  tags: common
+
+- name: Install base packages on RHEL/Rocky
+  ansible.builtin.dnf:
+    name: "{{ base_packages }}"
+    state: present
+  when: ansible_os_family == "RedHat"
+  tags: common
+
+- name: Install NTP daemon on Debian/Ubuntu
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+  tags: common
+
+- name: Install NTP daemon on RHEL/Rocky
+  ansible.builtin.dnf:
+    name: chrony
+    state: present
+  when: ansible_os_family == "RedHat"
+  tags: common
+
+- name: Configure NTP servers
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart chrony
+  tags: common
+
+- name: Enable and start chrony service
+  ansible.builtin.service:
+    name: chronyd
+    enabled: true
+    state: started
+  tags: common
+
+- name: Disable root SSH login
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin no'
+    state: present
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+  tags: common

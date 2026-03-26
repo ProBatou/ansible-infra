@@ -1,0 +1,16 @@
+---
+# Common variables applied to all hosts
+
+ansible_user: ansible
+ansible_python_interpreter: /usr/bin/python3
+
+ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+  - 2.pool.ntp.org
+
+base_packages:
+  - vim
+  - curl
+  - git
+  - htop

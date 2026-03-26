@@ -1,0 +1,12 @@
+---
+# Handlers for the common role
+
+- name: Restart chrony
+  ansible.builtin.service:
+    name: chronyd
+    state: restarted
+
+- name: Restart sshd
+  ansible.builtin.service:
+    name: sshd
+    state: restarted
