@@ -43,8 +43,15 @@
           Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
         body_format: form-urlencoded
         body:
-          command: "/bin/sh"
-          "extra-args": "-lc 'printf \"WHOAMI=\"; whoami; printf \"HOSTNAME=\"; hostname; printf \"OS=\"; . /etc/os-release 2>/dev/null; printf \"%s %s\\n\" \"${PRETTY_NAME:-unknown}\" \"${VERSION_ID:-}\"'"
+          command:
+            - "/bin/sh"
+            - "-lc"
+            - >-
+              printf 'WHOAMI='; whoami;
+              printf 'HOSTNAME='; hostname;
+              printf 'OS=';
+              . /etc/os-release 2>/dev/null;
+              printf '%s %s\n' "${PRETTY_NAME:-unknown}" "${VERSION_ID:-}"
         validate_certs: false
         return_content: true
         status_code: 200
