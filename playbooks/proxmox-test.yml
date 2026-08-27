@@ -1,0 +1,48 @@
+---
+- name: Test Proxmox API access from Semaphore
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
+    proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') }}"
+    proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
+    proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
+    proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
+
+  tasks:
+    - name: Validate required environment variables
+      ansible.builtin.assert:
+        that:
+          - proxmox_host | length > 0
+          - proxmox_node | length > 0
+          - proxmox_token_id | length > 0
+          - proxmox_token_secret | length > 0
+        fail_msg: "Missing one or more required PROXMOX_* environment variables in Semaphore."
+
+    - name: Query QEMU virtual machines on the Proxmox node
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_verify_ssl }}"
+        return_content: true
+        status_code: 200
+      register: proxmox_vms
+      no_log: true
+
+    - name: Show discovered VMs
+      ansible.builtin.debug:
+        msg: >-
+          {{ proxmox_vms.json.data
+             | sort(attribute='vmid')
+             | map(attribute='name')
+             | list }}
+
+    - name: Show VM summary
+      ansible.builtin.debug:
+        msg: >-
+          Discovered {{ proxmox_vms.json.data | length }} QEMU VM(s) on
+          {{ proxmox_node }} ({{ proxmox_host }}).
