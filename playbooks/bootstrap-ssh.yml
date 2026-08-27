@@ -9,7 +9,7 @@
     proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
     proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
     target_vm_name: "Hermes"
-    deploy_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOd9NiMu8wW1JnqE3vdawq9qx4hu7WJjp3eQUN9L6ebL deploy-automation"
+    deploy_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIISLKXEK3x6iQg6+StMuFcifSY6AsDyc5FPMIwQigJ6t semaphore-automation"
 
   tasks:
     - name: Find target VM
@@ -36,7 +36,7 @@
             )
           }}
 
-    - name: Inject deploy-automation public key through QEMU Guest Agent
+    - name: Inject semaphore-automation public key through QEMU Guest Agent
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ target_vmid }}/agent/exec"
         method: POST
