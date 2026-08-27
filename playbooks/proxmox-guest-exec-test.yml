@@ -1,0 +1,80 @@
+---
+- name: Test guest-exec via Proxmox QEMU Guest Agent
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
+    proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') }}"
+    proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
+    proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
+    target_vm_name: "Hermes"
+
+  tasks:
+    - name: Find target VM
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: false
+        return_content: true
+      register: vm_list
+      no_log: true
+
+    - name: Extract VMID
+      ansible.builtin.set_fact:
+        target_vmid: >-
+          {{
+            (
+              vm_list.json.data
+              | selectattr('name', 'equalto', target_vm_name)
+              | map(attribute='vmid')
+              | list
+              | first
+            )
+          }}
+
+    - name: Start read-only guest command
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ target_vmid }}/agent/exec"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        body_format: form-urlencoded
+        body:
+          command: "/bin/sh"
+          "extra-args": "-lc 'printf \"WHOAMI=\"; whoami; printf \"HOSTNAME=\"; hostname; printf \"OS=\"; . /etc/os-release 2>/dev/null; printf \"%s %s\\n\" \"${PRETTY_NAME:-unknown}\" \"${VERSION_ID:-}\"'"
+        validate_certs: false
+        return_content: true
+        status_code: 200
+      register: guest_exec_start
+      no_log: true
+
+    - name: Extract guest-exec PID
+      ansible.builtin.set_fact:
+        guest_exec_pid: "{{ guest_exec_start.json.data.pid }}"
+
+    - name: Wait for guest command to finish
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ target_vmid }}/agent/exec-status?pid={{ guest_exec_pid }}"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: false
+        return_content: true
+        status_code: 200
+      register: guest_exec_status
+      until: guest_exec_status.json.data.exited | default(false)
+      retries: 15
+      delay: 1
+      no_log: true
+
+    - name: Show guest-exec result
+      ansible.builtin.debug:
+        msg:
+          vm: "{{ target_vm_name }}"
+          vmid: "{{ target_vmid }}"
+          exitcode: "{{ guest_exec_status.json.data.exitcode | default('unknown') }}"
+          stdout: "{{ guest_exec_status.json.data['out-data'] | default('') }}"
+          stderr: "{{ guest_exec_status.json.data['err-data'] | default('') }}"
