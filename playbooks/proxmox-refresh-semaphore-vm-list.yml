@@ -1,0 +1,141 @@
+---
+- name: Refresh Semaphore Proxmox VM survey list
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
+    proxmox_node_filter: "{{ lookup('env', 'PROXMOX_NODE') | default('', true) }}"
+    proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
+    proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
+    proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
+
+    semaphore_url: "{{ lookup('env', 'SEMAPHORE_URL') | default('http://127.0.0.1:3000', true) | regex_replace('/+$', '') }}"
+    semaphore_api_token: "{{ lookup('env', 'SEMAPHORE_API_TOKEN') }}"
+    semaphore_project_id: "{{ lookup('env', 'SEMAPHORE_PROJECT_ID') | default('2', true) }}"
+    semaphore_template_id: "{{ lookup('env', 'SEMAPHORE_TARGET_TEMPLATE_ID') | default('6', true) }}"
+    semaphore_survey_var_name: "{{ lookup('env', 'SEMAPHORE_TARGET_SURVEY_VAR') | default('target_vms', true) }}"
+
+  tasks:
+    - name: Validate configuration
+      ansible.builtin.assert:
+        that:
+          - proxmox_host | length > 0
+          - proxmox_token_id | length > 0
+          - proxmox_token_secret | length > 0
+          - "'!' in proxmox_token_id"
+          - semaphore_api_token | length > 0
+        fail_msg: >-
+          Missing Proxmox configuration or SEMAPHORE_API_TOKEN.
+          PROXMOX_TOKEN_ID must use user@realm!token format.
+
+    - name: Derive Proxmox API user and token name
+      ansible.builtin.set_fact:
+        proxmox_api_user: "{{ proxmox_token_id.split('!')[0] }}"
+        proxmox_api_token_name: "{{ proxmox_token_id.split('!', 1)[1] }}"
+      no_log: true
+
+    - name: Query QEMU virtual machines and configuration
+      community.proxmox.proxmox_vm_info:
+        api_host: "{{ proxmox_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_name }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        node: "{{ proxmox_node_filter if proxmox_node_filter | length > 0 else omit }}"
+        type: qemu
+        config: current
+        validate_certs: "{{ proxmox_verify_ssl }}"
+      register: proxmox_info
+      no_log: true
+
+    - name: Initialize generated survey values
+      ansible.builtin.set_fact:
+        generated_vm_values:
+          - name: "Toutes les VM"
+            value: "all"
+        generated_tags: []
+
+    - name: Add VM names to generated survey values
+      ansible.builtin.set_fact:
+        generated_vm_values: >-
+          {{ generated_vm_values + [
+            {'name': item.name, 'value': item.name}
+          ] }}
+      loop: "{{ proxmox_info.proxmox_vms | sort(attribute='name') }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Collect Proxmox tags
+      ansible.builtin.set_fact:
+        generated_tags: >-
+          {{ (generated_tags + (item.config.tags | default('') | split(';')))
+             | map('trim') | reject('equalto', '') | unique | list }}
+      loop: "{{ proxmox_info.proxmox_vms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Add Proxmox tags to generated survey values
+      ansible.builtin.set_fact:
+        generated_vm_values: >-
+          {{ generated_vm_values + [
+            {'name': 'Tag: ' ~ item, 'value': 'tag:' ~ item}
+          ] }}
+      loop: "{{ generated_tags | sort }}"
+
+    - name: Read Semaphore target template
+      ansible.builtin.uri:
+        url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ semaphore_template_id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ semaphore_api_token }}"
+          Accept: application/json
+        return_content: true
+        status_code: 200
+      register: semaphore_template
+      no_log: true
+
+    - name: Preserve survey variables other than target selector
+      ansible.builtin.set_fact:
+        preserved_survey_vars: >-
+          {{ semaphore_template.json.survey_vars | default([])
+             | rejectattr('name', 'equalto', semaphore_survey_var_name)
+             | rejectattr('name', 'equalto', 'target_vm')
+             | list }}
+
+    - name: Build refreshed target survey variable
+      ansible.builtin.set_fact:
+        refreshed_target_survey:
+          name: "{{ semaphore_survey_var_name }}"
+          title: "Cible"
+          description: "VM ou groupe Proxmox. Liste actualisée automatiquement depuis Proxmox."
+          required: true
+          type: enum
+          values: "{{ generated_vm_values }}"
+          default_value: ""
+
+    - name: Update Semaphore target template survey
+      ansible.builtin.uri:
+        url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ semaphore_template_id }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ semaphore_api_token }}"
+          Accept: application/json
+          Content-Type: application/json
+        body_format: json
+        body: >-
+          {{ semaphore_template.json
+             | combine({'survey_vars': preserved_survey_vars + [refreshed_target_survey]}) }}
+        status_code:
+          - 200
+          - 204
+      no_log: true
+
+    - name: Show refresh result
+      ansible.builtin.debug:
+        msg:
+          template_id: "{{ semaphore_template_id }}"
+          survey_variable: "{{ semaphore_survey_var_name }}"
+          vm_count: "{{ proxmox_info.proxmox_vms | length }}"
+          tag_count: "{{ generated_tags | length }}"
+          choices: "{{ generated_vm_values | map(attribute='value') | list }}"
