@@ -14,6 +14,9 @@
     semaphore_project_id: "{{ lookup('env', 'SEMAPHORE_PROJECT_ID') | default('2', true) }}"
     semaphore_survey_var_name: "{{ lookup('env', 'SEMAPHORE_TARGET_SURVEY_VAR') | default('target_vms', true) }}"
     semaphore_node_survey_var_name: "target_node"
+    semaphore_excluded_proxmox_playbooks:
+      - playbooks/proxmox-refresh-semaphore-vm-list.yml
+      - playbooks/proxmox-test.yml
 
   tasks:
     - name: Validate configuration
@@ -114,13 +117,21 @@
       ansible.builtin.set_fact:
         proxmox_target_templates: []
 
-    - name: Select templates using Proxmox target surveys
+    - name: Select Proxmox guest templates
       ansible.builtin.set_fact:
         proxmox_target_templates: "{{ proxmox_target_templates + [item.json] }}"
       loop: "{{ semaphore_template_details.results }}"
       loop_control:
         label: "{{ item.json.name }}"
-      when: semaphore_survey_var_name in (item.json.survey_vars | default([]) | map(attribute='name') | list)
+      vars:
+        template_playbook: "{{ item.json.playbook | default('') }}"
+        template_survey_names: "{{ item.json.survey_vars | default([]) | map(attribute='name') | list }}"
+      when:
+        - >-
+          (semaphore_survey_var_name in template_survey_names)
+          or
+          (template_playbook.startswith('playbooks/proxmox-')
+           and template_playbook not in semaphore_excluded_proxmox_playbooks)
 
     - name: Build refreshed node survey variable
       ansible.builtin.set_fact:
