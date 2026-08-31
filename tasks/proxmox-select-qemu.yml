@@ -5,11 +5,18 @@
       - proxmox_host | length > 0
       - proxmox_token_id | length > 0
       - proxmox_token_secret | length > 0
-    fail_msg: "Missing PROXMOX_HOST, PROXMOX_TOKEN_ID or PROXMOX_TOKEN_SECRET."
+      - "'!' in proxmox_token_id"
+    fail_msg: "Missing or invalid PROXMOX_HOST, PROXMOX_TOKEN_ID or PROXMOX_TOKEN_SECRET. PROXMOX_TOKEN_ID must use user@realm!token format."
+
+- name: Derive Proxmox API user from token ID
+  ansible.builtin.set_fact:
+    proxmox_api_user: "{{ proxmox_token_id.split('!')[0] }}"
+  no_log: true
 
 - name: Query QEMU virtual machines and configuration
   community.proxmox.proxmox_vm_info:
     api_host: "{{ proxmox_host }}"
+    api_user: "{{ proxmox_api_user }}"
     api_token_id: "{{ proxmox_token_id }}"
     api_token_secret: "{{ proxmox_token_secret }}"
     node: "{{ proxmox_node_filter if proxmox_node_filter | length > 0 else omit }}"
