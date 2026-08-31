@@ -2,52 +2,70 @@
 - name: Test QEMU Guest Agent via Proxmox API
   hosts: localhost
   gather_facts: false
+  connection: local
 
   vars:
     proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
     proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') }}"
     proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
     proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
-    target_vm_name: "Hermes"
+    proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
 
   tasks:
-    - name: Find target VM
+    - name: Validate required environment variables
+      ansible.builtin.assert:
+        that:
+          - proxmox_host | length > 0
+          - proxmox_node | length > 0
+          - proxmox_token_id | length > 0
+          - proxmox_token_secret | length > 0
+        fail_msg: "Missing one or more required PROXMOX_* environment variables."
+
+    - name: Query QEMU virtual machines
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu"
         method: GET
         headers:
           Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: false
+        validate_certs: "{{ proxmox_verify_ssl }}"
         return_content: true
+        status_code: 200
       register: vm_list
+      no_log: true
 
-    - name: Extract VMID
+    - name: Validate at least one VM exists
+      ansible.builtin.assert:
+        that:
+          - vm_list.json.data | length > 0
+        fail_msg: "No QEMU VM found on node {{ proxmox_node }}."
+
+    - name: Select requested VM or first VM by VMID
       ansible.builtin.set_fact:
-        target_vmid: >-
+        selected_vm: >-
           {{
-            (
-              vm_list.json.data
-              | selectattr('name', 'equalto', target_vm_name)
-              | map(attribute='vmid')
-              | list
-              | first
-            )
+            ((vm_list.json.data | selectattr('name', 'equalto', target_vm) | list | first)
+              if (target_vm is defined and target_vm | trim | length > 0)
+              else (vm_list.json.data | sort(attribute='vmid') | first))
           }}
 
     - name: Show selected VM
       ansible.builtin.debug:
-        msg: "Testing {{ target_vm_name }} (VMID {{ target_vmid }})"
+        msg: "Testing {{ selected_vm.name }} (VMID {{ selected_vm.vmid }})"
 
     - name: Test QEMU Guest Agent
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ target_vmid }}/agent/ping"
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ selected_vm.vmid }}/agent/ping"
         method: POST
         headers:
           Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: false
+        validate_certs: "{{ proxmox_verify_ssl }}"
         return_content: true
+        status_code: 200
       register: agent_ping
 
     - name: Show Guest Agent result
       ansible.builtin.debug:
-        var: agent_ping.json
+        msg:
+          vm: "{{ selected_vm.name }}"
+          vmid: "{{ selected_vm.vmid }}"
+          result: "{{ agent_ping.json }}"
