@@ -1,5 +1,5 @@
 ---
-- name: Refresh Semaphore Proxmox VM survey list
+- name: Refresh Semaphore Proxmox VM survey lists
   hosts: localhost
   gather_facts: false
   connection: local
@@ -12,7 +12,6 @@
     semaphore_url: "{{ lookup('env', 'SEMAPHORE_URL') | default('http://127.0.0.1:3000', true) | regex_replace('/+$', '') }}"
     semaphore_api_token: "{{ lookup('env', 'SEMAPHORE_API_TOKEN') }}"
     semaphore_project_id: "{{ lookup('env', 'SEMAPHORE_PROJECT_ID') | default('2', true) }}"
-    semaphore_template_id: "{{ lookup('env', 'SEMAPHORE_TARGET_TEMPLATE_ID') | default('6', true) }}"
     semaphore_survey_var_name: "{{ lookup('env', 'SEMAPHORE_TARGET_SURVEY_VAR') | default('target_vms', true) }}"
     semaphore_node_survey_var_name: "target_node"
 
@@ -84,25 +83,25 @@
       loop_control:
         label: "{{ item.name }} [VMID {{ item.vmid }}]"
 
-    - name: Read Semaphore target template
+    - name: Read Semaphore project templates
       ansible.builtin.uri:
-        url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ semaphore_template_id }}"
+        url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates"
         method: GET
         headers:
           Authorization: "Bearer {{ semaphore_api_token }}"
           Accept: application/json
         return_content: true
         status_code: 200
-      register: semaphore_template
+      register: semaphore_templates
       no_log: true
 
-    - name: Preserve survey variables other than Proxmox selectors
+    - name: Select templates using Proxmox target surveys
       ansible.builtin.set_fact:
-        preserved_survey_vars: >-
-          {{ semaphore_template.json.survey_vars | default([])
-             | rejectattr('name', 'equalto', semaphore_survey_var_name)
-             | rejectattr('name', 'equalto', 'target_vm')
-             | rejectattr('name', 'equalto', semaphore_node_survey_var_name) | list }}
+        proxmox_target_templates: >-
+          {{ semaphore_templates.json
+             | selectattr('survey_vars', 'defined')
+             | selectattr('survey_vars', 'selectattr', 'name', 'equalto', semaphore_survey_var_name)
+             | list }}
 
     - name: Build refreshed node survey variable
       ansible.builtin.set_fact:
@@ -126,26 +125,20 @@
           values: "{{ generated_vm_values }}"
           default_value: ""
 
-    - name: Update Semaphore target template surveys
-      ansible.builtin.uri:
-        url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ semaphore_template_id }}"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ semaphore_api_token }}"
-          Accept: application/json
-          Content-Type: application/json
-        body_format: json
-        body: "{{ semaphore_template.json | combine({'survey_vars': preserved_survey_vars + [refreshed_node_survey, refreshed_target_survey]}) }}"
-        status_code: [200, 204]
-      no_log: true
+    - name: Refresh Proxmox surveys on matching templates
+      ansible.builtin.include_tasks: ../tasks/semaphore-refresh-proxmox-template.yml
+      loop: "{{ proxmox_target_templates }}"
+      loop_control:
+        loop_var: target_template
+        label: "{{ target_template.name }} ({{ target_template.id }})"
 
     - name: Show refresh result
       ansible.builtin.debug:
         msg:
-          template_id: "{{ semaphore_template_id }}"
+          templates: "{{ proxmox_target_templates | map(attribute='name') | list }}"
+          template_count: "{{ proxmox_target_templates | length }}"
           nodes: "{{ generated_nodes }}"
           node_choices: "{{ generated_node_values | map(attribute='value') | list }}"
           vm_count: "{{ proxmox_info.proxmox_vms | length }}"
           tag_count: "{{ generated_tags | length }}"
           tags: "{{ generated_tags | sort }}"
-          target_choices: "{{ generated_vm_values | map(attribute='value') | list }}"
