@@ -22,7 +22,7 @@ Virtual machines
 
 The project uses the maintained `community.proxmox` collection instead of implementing Proxmox REST calls manually.
 
-`community.proxmox.proxmox_vm_info` is used for VM discovery and `community.proxmox.proxmox_qemu_api` is the Ansible connection plugin used to execute normal Ansible tasks inside Linux QEMU guests through QEMU Guest Agent. Managed VMs do not need SSH access or direct network connectivity from Semaphore.
+`community.proxmox.proxmox_vm_info` is used for cluster-wide VM discovery and `community.proxmox.proxmox_qemu_api` is the Ansible connection plugin used to execute normal Ansible tasks inside Linux QEMU guests through QEMU Guest Agent. Managed VMs do not need SSH access or direct network connectivity from Semaphore.
 
 ## Requirements
 
@@ -48,29 +48,41 @@ Environment variables:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `PROXMOX_HOST` | yes | Proxmox API hostname or IP |
-| `PROXMOX_TOKEN_ID` | yes | Proxmox API token ID |
+| `PROXMOX_HOST` | yes | Proxmox API hostname or IP for cluster discovery |
+| `PROXMOX_TOKEN_ID` | yes | Proxmox API token ID in `user@realm!token` format |
 | `PROXMOX_TOKEN_SECRET` | yes | Proxmox API token secret |
-| `PROXMOX_NODE` | no | Restrict discovery to one Proxmox node |
 | `PROXMOX_VERIFY_SSL` | no | Validate the Proxmox TLS certificate; defaults to `false` in this project |
+| `SEMAPHORE_API_TOKEN` | refresh only | Semaphore API token used by the survey refresh playbook |
+| `SEMAPHORE_URL` | no | Semaphore base URL; defaults to `http://127.0.0.1:3000` |
+| `SEMAPHORE_PROJECT_ID` | no | Semaphore project ID; defaults to `2` |
+| `SEMAPHORE_TARGET_TEMPLATE_ID` | no | Template whose Proxmox surveys are refreshed; defaults to `6` |
+
+`PROXMOX_NODE` is no longer required. Nodes are discovered dynamically and selected through the Semaphore Survey.
 
 Secrets must stay in Semaphore/environment configuration and must never be committed to Git.
 
-## VM selection
+## Target selection
 
-Playbooks that act on guests use the common `target_vms` selector.
+Guest playbooks use two selectors:
 
-Supported forms:
+- `target_node`: `all` or a discovered Proxmox node name.
+- `target_vms`: one VM, `all`, or `tag:<tag>`.
+
+Examples:
 
 ```text
-Media
-aVM,anotherVM
-all
-tag:debian
-tag:infra
+target_node=all
+target_vms=tag:Debian
+
+# or
+
+target_node=ProxmoxPB
+target_vms=Media
 ```
 
-Proxmox tags are therefore the preferred way to create dynamic groups without maintaining a separate Ansible inventory.
+The node filter is applied before the VM/tag selector, so the same tag can target a single node or the whole cluster.
+
+Proxmox tags are the preferred way to create dynamic groups without maintaining a separate Ansible inventory.
 
 The reusable selection logic lives in `tasks/proxmox-select-qemu.yml`.
 
@@ -83,9 +95,16 @@ A minimal local inventory is sufficient for the discovery phase:
 localhost ansible_connection=local
 ```
 
-Store the `PROXMOX_*` values in a Semaphore Variable Group.
+`localhost` is only the Ansible controller used to call the Proxmox and Semaphore APIs. It is not a managed guest VM.
 
-For playbooks using VM selection, expose `target_vms` as a Survey variable. Commands or other playbook-specific parameters can be exposed as additional Survey variables.
+Store the API values in a Semaphore Variable Group.
+
+The playbook `playbooks/proxmox-refresh-semaphore-vm-list.yml` discovers the current cluster state and updates the target template with two Enum surveys:
+
+- **Nœud Proxmox**: `Tout le cluster` plus every discovered node.
+- **Cible**: `Toutes les VM`, discovered Proxmox tag groups, then individual VMs with their node shown in the label.
+
+Run the refresh playbook after adding/removing/migrating VMs, changing tags, or changing cluster nodes. It can also be scheduled in Semaphore.
 
 ## Security
 
