@@ -16,7 +16,6 @@
     semaphore_node_survey_var_name: "target_node"
     semaphore_excluded_proxmox_playbooks:
       - playbooks/proxmox-refresh-semaphore-vm-list.yml
-      - playbooks/proxmox-test.yml
 
   tasks:
     - name: Validate configuration
