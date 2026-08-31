@@ -13,82 +13,10 @@
     target_selector: "{{ target_vms | default(target_vm | default('')) | trim }}"
 
   tasks:
-    - name: Validate Proxmox API configuration
-      ansible.builtin.assert:
-        that:
-          - proxmox_host | length > 0
-          - proxmox_token_id | length > 0
-          - proxmox_token_secret | length > 0
-        fail_msg: "Missing PROXMOX_HOST, PROXMOX_TOKEN_ID or PROXMOX_TOKEN_SECRET."
+    - name: Select target VMs
+      ansible.builtin.include_tasks: ../tasks/proxmox-select-qemu.yml
 
-    - name: Query QEMU virtual machines and configuration
-      community.proxmox.proxmox_vm_info:
-        api_host: "{{ proxmox_host }}"
-        api_token_id: "{{ proxmox_token_id }}"
-        api_token_secret: "{{ proxmox_token_secret }}"
-        node: "{{ proxmox_node_filter if proxmox_node_filter | length > 0 else omit }}"
-        type: qemu
-        config: current
-        validate_certs: "{{ proxmox_verify_ssl }}"
-      register: proxmox_info
-      no_log: true
-
-    - name: Validate selector
-      ansible.builtin.assert:
-        that:
-          - target_selector | length > 0
-        fail_msg: >-
-          Set target_vms to a VM name, comma-separated VM names, tag:<tag>, or all.
-
-    - name: Select all virtual machines
-      ansible.builtin.set_fact:
-        selected_vms: "{{ proxmox_info.proxmox_vms }}"
-      when: target_selector | lower == 'all'
-
-    - name: Select virtual machines by Proxmox tag
-      ansible.builtin.set_fact:
-        selected_vms: >-
-          {{ proxmox_info.proxmox_vms
-             | selectattr('config.tags', 'defined')
-             | selectattr('config.tags', 'search', '(^|;)' ~ (target_selector[4:] | trim) ~ '(;|$)')
-             | list }}
-      when: target_selector | lower is match('^tag:')
-
-    - name: Select virtual machines by name
-      ansible.builtin.set_fact:
-        selected_vms: >-
-          {{ proxmox_info.proxmox_vms
-             | selectattr('name', 'in', target_selector.split(',') | map('trim') | list)
-             | list }}
-      when:
-        - target_selector | lower != 'all'
-        - not (target_selector | lower is match('^tag:'))
-
-    - name: Validate selected virtual machines
-      ansible.builtin.assert:
-        that:
-          - selected_vms | default([]) | length > 0
-        fail_msg: "No QEMU VM matches selector '{{ target_selector }}'."
-
-    - name: Add selected VMs to temporary Ansible inventory
-      ansible.builtin.add_host:
-        name: "{{ item.name }}"
-        groups: proxmox_targets
-        ansible_connection: community.proxmox.proxmox_qemu_api
-        proxmox_vmid: "{{ item.vmid }}"
-        proxmox_node: "{{ item.node }}"
-        proxmox_api_host: "{{ proxmox_host }}"
-        proxmox_api_token_id: "{{ proxmox_token_id }}"
-        proxmox_api_token_secret: "{{ proxmox_token_secret }}"
-        proxmox_validate_certs: "{{ proxmox_verify_ssl }}"
-      loop: "{{ selected_vms }}"
-      no_log: true
-
-    - name: Show selected VMs
-      ansible.builtin.debug:
-        msg: "Selected: {{ selected_vms | map(attribute='name') | list | join(', ') }}"
-
-- name: Check APT updates through community.proxmox QEMU API connection
+- name: Check APT updates through Proxmox QEMU Guest Agent
   hosts: proxmox_targets
   gather_facts: false
   serial: "{{ apt_serial | default(5) }}"
