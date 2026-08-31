@@ -38,14 +38,25 @@
     selected_vms: "{{ proxmox_info.proxmox_vms }}"
   when: target_selector | lower == 'all'
 
+- name: Initialize tag selection
+  ansible.builtin.set_fact:
+    selected_vms: []
+    selected_tag: "{{ target_selector[4:] | trim }}"
+  when: target_selector | lower is match('^tag:')
+
 - name: Select virtual machines by Proxmox tag
   ansible.builtin.set_fact:
-    selected_vms: >-
-      {{ proxmox_info.proxmox_vms
-         | selectattr('config.tags', 'defined')
-         | selectattr('config.tags', 'search', '(^|;)' ~ (target_selector[4:] | trim) ~ '(;|$)')
-         | list }}
-  when: target_selector | lower is match('^tag:')
+    selected_vms: "{{ selected_vms + [item] }}"
+  vars:
+    vm_tags: >-
+      {{ ((item.tags | default(item.config.tags | default(''), true)) | string).split(';')
+         | map('trim') | reject('equalto', '') | list }}
+  loop: "{{ proxmox_info.proxmox_vms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - target_selector | lower is match('^tag:')
+    - selected_tag in vm_tags
 
 - name: Select virtual machines by name
   ansible.builtin.set_fact:
