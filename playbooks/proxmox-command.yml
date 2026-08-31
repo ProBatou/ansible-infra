@@ -6,11 +6,11 @@
 
   vars:
     proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
-    proxmox_node_filter: "{{ lookup('env', 'PROXMOX_NODE') | default('', true) }}"
     proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
     proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
     proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
     target_selector: "{{ target_vms | default(target_vm | default('')) | trim }}"
+    target_node_selector: "{{ target_node | default('all') | trim }}"
 
   tasks:
     - name: Validate command
