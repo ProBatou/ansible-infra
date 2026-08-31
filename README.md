@@ -80,7 +80,7 @@ localhost ansible_connection=local
 
 `localhost` is only the Ansible controller used to call the Proxmox and Semaphore APIs. It is not a managed guest VM.
 
-The playbook `playbooks/proxmox-refresh-semaphore-vm-list.yml` discovers the current cluster state and automatically refreshes Semaphore templates that target Proxmox guests. A template is selected when either it already contains a `target_vms` survey variable or its playbook path starts with `playbooks/proxmox-`. Internal controller/test playbooks such as the refresh playbook itself and `proxmox-test.yml` are excluded.
+The playbook `playbooks/proxmox-refresh-semaphore-vm-list.yml` discovers the current cluster state and automatically refreshes Semaphore templates that target Proxmox guests. A template is selected when either it already contains a `target_vms` survey variable or its playbook path starts with `playbooks/proxmox-`. The refresh playbook itself is excluded.
 
 For every matching template, the refresh playbook regenerates and places these selectors first:
 
