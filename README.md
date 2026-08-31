@@ -80,14 +80,14 @@ localhost ansible_connection=local
 
 `localhost` is only the Ansible controller used to call the Proxmox and Semaphore APIs. It is not a managed guest VM.
 
-The playbook `playbooks/proxmox-refresh-semaphore-vm-list.yml` discovers the current cluster state and refreshes **every Semaphore template that contains a `target_vms` survey variable**. This removes the need to maintain a list of Semaphore template IDs as new Proxmox playbooks are added.
+The playbook `playbooks/proxmox-refresh-semaphore-vm-list.yml` discovers the current cluster state and automatically refreshes Semaphore templates that target Proxmox guests. A template is selected when either it already contains a `target_vms` survey variable or its playbook path starts with `playbooks/proxmox-`. Internal controller/test playbooks such as the refresh playbook itself and `proxmox-test.yml` are excluded.
 
 For every matching template, the refresh playbook regenerates and places these selectors first while preserving all other template-specific survey variables:
 
 - **Nœud Proxmox** (`target_node`): `Tout le cluster` plus every discovered node.
 - **Cible** (`target_vms`): `Toutes les VM`, discovered Proxmox tag groups, then individual VMs displayed as `Name [VMID id] (Node)`.
 
-A new Proxmox template therefore only needs a `target_vms` survey variable once as its marker; the next refresh automatically creates/updates `target_node`, replaces `target_vms` with the generated choices, and leaves variables such as `guest_command` or confirmations intact.
+A new Semaphore template pointing to a Proxmox guest playbook therefore does not need placeholder selector values. The next refresh automatically creates/updates `target_node` and `target_vms`, while leaving variables such as `guest_command` or confirmations intact.
 
 Run the refresh playbook after adding a new Proxmox template, adding/removing/migrating VMs, changing VMIDs/tags, or changing cluster nodes. It can also be scheduled in Semaphore.
 
