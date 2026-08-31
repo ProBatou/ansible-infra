@@ -1,9 +1,0 @@
----
-- name: Apply common configuration to all hosts
-  hosts: all
-  become: true
-  gather_facts: true
-  tags: common
-
-  roles:
-    - role: common
