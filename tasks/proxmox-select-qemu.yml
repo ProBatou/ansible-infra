@@ -48,25 +48,25 @@
     selected_vms: "{{ candidate_vms }}"
   when: target_selector | lower == 'all'
 
-- name: Initialize tag selection
-  ansible.builtin.set_fact:
-    selected_vms: []
-  when: target_selector | lower is match('^tag:')
-
 - name: Select virtual machines by Proxmox tag
-  ansible.builtin.set_fact:
-    selected_vms: "{{ selected_vms + [item] }}"
-  vars:
-    vm_tags: >-
-      {{ (((item.tags | default(item.config.tags | default(''), true)) | string).split(';'))
-         | map('trim') | reject('equalto', '') | list }}
-    wanted_tag: "{{ target_selector[4:] | trim }}"
-  loop: "{{ candidate_vms }}"
-  loop_control:
-    label: "{{ item.name }} [VMID {{ item.vmid }}]"
-  when:
-    - target_selector | lower is match('^tag:')
-    - wanted_tag in vm_tags
+  when: target_selector | lower is match('^tag:')
+  block:
+    - name: Initialize tag selection
+      ansible.builtin.set_fact:
+        selected_vms: []
+
+    - name: Match candidate virtual machines by tag
+      ansible.builtin.set_fact:
+        selected_vms: "{{ selected_vms + [item] }}"
+      vars:
+        vm_tags: >-
+          {{ (((item.tags | default(item.config.tags | default(''), true)) | string).split(';'))
+             | map('trim') | reject('equalto', '') | list }}
+        wanted_tag: "{{ target_selector[4:] | trim }}"
+      loop: "{{ candidate_vms }}"
+      loop_control:
+        label: "{{ item.name }} [VMID {{ item.vmid }}]"
+      when: wanted_tag in vm_tags
 
 - name: Select virtual machine by VMID
   ansible.builtin.set_fact:
