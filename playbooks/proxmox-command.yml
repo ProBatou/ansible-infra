@@ -1,0 +1,45 @@
+---
+- name: Select Proxmox QEMU virtual machines
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
+    proxmox_node_filter: "{{ lookup('env', 'PROXMOX_NODE') | default('', true) }}"
+    proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
+    proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
+    proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
+    target_selector: "{{ target_vms | default(target_vm | default('')) | trim }}"
+
+  tasks:
+    - name: Validate command
+      ansible.builtin.assert:
+        that:
+          - guest_command is defined
+          - guest_command | trim | length > 0
+        fail_msg: "Set guest_command to the command to execute."
+
+    - name: Select target VMs
+      ansible.builtin.include_tasks: ../tasks/proxmox-select-qemu.yml
+
+- name: Execute command through Proxmox QEMU Guest Agent
+  hosts: proxmox_targets
+  gather_facts: false
+  serial: "{{ command_serial | default(5) }}"
+  become: false
+
+  tasks:
+    - name: Run requested command
+      ansible.builtin.shell:
+        cmd: "{{ guest_command }}"
+      register: command_result
+      changed_when: false
+
+    - name: Show command result
+      ansible.builtin.debug:
+        msg:
+          vm: "{{ inventory_hostname }}"
+          rc: "{{ command_result.rc }}"
+          stdout: "{{ command_result.stdout }}"
+          stderr: "{{ command_result.stderr }}"
