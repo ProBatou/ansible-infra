@@ -95,17 +95,32 @@
       register: semaphore_templates
       no_log: true
 
+    - name: Read full Semaphore template details
+      ansible.builtin.uri:
+        url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ item.id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ semaphore_api_token }}"
+          Accept: application/json
+        return_content: true
+        status_code: 200
+      loop: "{{ semaphore_templates.json }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.id }})"
+      register: semaphore_template_details
+      no_log: true
+
     - name: Initialize matching template list
       ansible.builtin.set_fact:
         proxmox_target_templates: []
 
     - name: Select templates using Proxmox target surveys
       ansible.builtin.set_fact:
-        proxmox_target_templates: "{{ proxmox_target_templates + [item] }}"
-      loop: "{{ semaphore_templates.json }}"
+        proxmox_target_templates: "{{ proxmox_target_templates + [item.json] }}"
+      loop: "{{ semaphore_template_details.results }}"
       loop_control:
-        label: "{{ item.name | default('template ' ~ (item.id | default('?') | string)) }}"
-      when: semaphore_survey_var_name in (item.survey_vars | default([]) | map(attribute='name') | list)
+        label: "{{ item.json.name }}"
+      when: semaphore_survey_var_name in (item.json.survey_vars | default([]) | map(attribute='name') | list)
 
     - name: Build refreshed node survey variable
       ansible.builtin.set_fact:
