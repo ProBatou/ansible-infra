@@ -8,9 +8,19 @@
     proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') }}"
     proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
     proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
-    target_vm_name: "Hermes"
 
   tasks:
+    - name: Validate target VM was provided
+      ansible.builtin.assert:
+        that:
+          - target_vm is defined
+          - target_vm | trim | length > 0
+        fail_msg: "Provide target_vm from the Semaphore template survey."
+
+    - name: Set target VM name
+      ansible.builtin.set_fact:
+        target_vm_name: "{{ target_vm | trim }}"
+
     - name: Find target VM
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu"
@@ -22,18 +32,25 @@
       register: vm_list
       no_log: true
 
+    - name: Extract matching VM IDs
+      ansible.builtin.set_fact:
+        matching_vmids: >-
+          {{
+            vm_list.json.data
+            | selectattr('name', 'equalto', target_vm_name)
+            | map(attribute='vmid')
+            | list
+          }}
+
+    - name: Validate target VM exists uniquely
+      ansible.builtin.assert:
+        that:
+          - matching_vmids | length == 1
+        fail_msg: "VM '{{ target_vm_name }}' was not found uniquely on {{ proxmox_node }}."
+
     - name: Extract VMID
       ansible.builtin.set_fact:
-        target_vmid: >-
-          {{
-            (
-              vm_list.json.data
-              | selectattr('name', 'equalto', target_vm_name)
-              | map(attribute='vmid')
-              | list
-              | first
-            )
-          }}
+        target_vmid: "{{ matching_vmids | first }}"
 
     - name: Start apt update and count available upgrades
       ansible.builtin.uri:
