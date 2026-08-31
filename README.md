@@ -1,162 +1,128 @@
 # ansible-infra
 
-Ansible repository for managing Linux VMs in a single production environment using [Ansible](https://www.ansible.com/) and [Semaphore UI](https://www.semui.co/).
+Ansible playbooks designed for Semaphore UI to manage Proxmox VE virtual machines through the Proxmox API and QEMU Guest Agent.
 
-## Supported Operating Systems
+No SSH access to managed VMs is required for the current playbooks.
 
-- **Debian / Ubuntu**
-- **RHEL / Rocky Linux**
+## Architecture
 
-## Prerequisites
-
-- Ansible ≥ 2.14 installed on the control node
-- SSH key-based authentication configured for all managed hosts (no password login)
-- The `ansible` user exists on every managed host with `sudo` / `become` privileges
-- Python 3 available on managed hosts at `/usr/bin/python3`
-
-## Repository Structure
-
-```
-ansible-infra/
-├── ansible.cfg                # Ansible configuration (roles_path, inventory, defaults)
-├── requirements.yml           # Collection dependencies (community.general >= 7.0.0)
-├── inventory/
-│   ├── hosts.ini              # Static host groups: [all], [web], [db], [docker_hosts]
-│   └── proxmox.yml            # Proxmox dynamic inventory plugin configuration
-├── group_vars/
-│   ├── all.yml                # Common vars: ansible_user, ntp_servers, base_packages, proxmox_*
-│   └── docker_hosts.yml       # Docker-specific vars
-├── roles/
-│   ├── common/
-│   │   ├── handlers/main.yml  # Handlers: restart chrony, sshd
-│   │   ├── tasks/main.yml     # Hostname, base packages, NTP, disable root SSH
-│   │   └── templates/
-│   │       └── chrony.conf.j2 # Chrony NTP configuration template
-│   ├── updates/
-│   │   └── tasks/main.yml     # apt/dnf full system update + autoremove
-│   └── docker/
-│       └── tasks/main.yml     # Docker CE + docker-compose-plugin installation
-├── playbooks/
-│   ├── common.yml             # Apply common role to all hosts
-│   ├── updates.yml            # Apply updates role to all hosts
-│   └── docker.yml             # Apply docker role to docker_hosts
-├── .gitignore
-└── README.md
+```text
+Semaphore UI
+    |
+    v
+Proxmox API
+    |
+    v
+QEMU Guest Agent
+    |
+    v
+Virtual machine
 ```
 
-## Inventory
+The Ansible controller itself only needs to run the playbooks locally. Commands inside VMs are executed through Proxmox `agent/exec`.
 
-Edit `inventory/hosts.ini` to reflect your environment. The default groups are:
+## Requirements
 
-| Group          | Purpose                            |
-|----------------|------------------------------------|
-| `all`          | Every managed host                 |
-| `web`          | Web / front-end servers            |
-| `db`           | Database servers                   |
-| `docker_hosts` | Hosts that run Docker workloads    |
+- Proxmox VE with API access
+- QEMU Guest Agent installed, enabled and running in VMs that need guest commands
+- Ansible / Semaphore UI
+- Collections from `requirements.yml`
 
-## Running Playbooks
+## Proxmox API variables
 
-All playbooks use `become: true` (privilege escalation) and require SSH key authentication.
+Configure these environment variables in Semaphore, preferably through a Variable Group:
 
-### Apply common configuration (hostname, packages, NTP, SSH hardening)
+| Variable | Description |
+| --- | --- |
+| `PROXMOX_HOST` | Proxmox host name or IP reachable by Semaphore |
+| `PROXMOX_NODE` | Proxmox node name |
+| `PROXMOX_TOKEN_ID` | API token ID |
+| `PROXMOX_TOKEN_SECRET` | API token secret |
+| `PROXMOX_VERIFY_SSL` | Optional. `true` to validate the Proxmox TLS certificate, otherwise defaults to `false` where supported |
 
-```bash
-ansible-playbook -i inventory/hosts.ini playbooks/common.yml
+Do not commit API secrets to this repository.
+
+## Semaphore inventory
+
+The playbooks run on the Ansible controller itself, so a minimal Semaphore static inventory is enough:
+
+```ini
+[local]
+localhost ansible_connection=local
 ```
 
-### Apply system updates
+No inventory of VM IP addresses is required.
 
-```bash
-ansible-playbook -i inventory/hosts.ini playbooks/updates.yml
+## Playbooks
+
+### `playbooks/proxmox-test.yml`
+
+Read-only API connectivity test. Lists QEMU VMs discovered on the configured Proxmox node.
+
+### `playbooks/proxmox-agent-test.yml`
+
+Tests whether QEMU Guest Agent responds on a VM.
+
+Optional extra variable:
+
+```yaml
+target_vm: MyVM
 ```
 
-### Install Docker
+If `target_vm` is omitted, the playbook selects the first VM by VMID.
 
-```bash
-ansible-playbook -i inventory/hosts.ini playbooks/docker.yml
+### `playbooks/proxmox-guest-exec-test.yml`
+
+Runs a read-only command through QEMU Guest Agent and reports the guest user, hostname and operating system.
+
+Optional extra variable:
+
+```yaml
+target_vm: MyVM
 ```
 
-### Limit to a specific host or group
+If omitted, the first VM by VMID is selected.
 
-```bash
-ansible-playbook -i inventory/hosts.ini playbooks/common.yml --limit web
-ansible-playbook -i inventory/hosts.ini playbooks/updates.yml --limit db01
+### `playbooks/proxmox-apt-check.yml`
+
+For Debian/Ubuntu guests, refreshes APT metadata and reports:
+
+- guest hostname
+- number of upgradable packages
+- whether a reboot is required
+
+It does not install upgrades.
+
+Optional extra variable:
+
+```yaml
+target_vm: MyVM
 ```
 
-### Dry-run (check mode)
+If omitted, the first VM by VMID is selected. The selected guest must provide `apt-get` and QEMU Guest Agent.
 
-```bash
-ansible-playbook -i inventory/hosts.ini playbooks/common.yml --check
+## Semaphore template example
+
+For an APT check template:
+
+```text
+Name: Proxmox - APT Check
+Repository: this repository
+Playbook: playbooks/proxmox-apt-check.yml
+Inventory: local inventory using ansible_connection=local
+Variable Group: Proxmox API credentials
 ```
 
-## Vault (secrets)
+A Semaphore survey variable named `target_vm` can be added to select the VM when starting the task. It can remain optional if automatic first-VM selection is desired.
 
-Sensitive values (passwords, tokens) should be stored in `group_vars/vault.yml` and encrypted with Ansible Vault:
-
-```bash
-ansible-vault create group_vars/vault.yml
-ansible-vault edit   group_vars/vault.yml
-```
-
-Store the vault password in a file named `vault_pass` (excluded from git via `.gitignore`) and use:
-
-```bash
-ansible-playbook -i inventory/hosts.ini playbooks/common.yml --vault-password-file vault_pass
-```
-
-## Proxmox Dynamic Inventory
-
-This repository ships with a dynamic inventory plugin for Proxmox VE 7.x / 8.x powered by `community.general.proxmox`.
-
-### 1. Install the required collection
+## Install Ansible collections
 
 ```bash
 ansible-galaxy collection install -r requirements.yml
 ```
 
-### 2. Set the required variables
+Semaphore can also install `requirements.yml` automatically when the repository is cloned for a task.
 
-| Variable           | Description                              |
-|--------------------|------------------------------------------|
-| `proxmox_url`      | Proxmox API URL, e.g. `https://pve:8006` |
-| `proxmox_user`     | Proxmox API user, e.g. `ansible@pam`     |
-| `proxmox_password` | Proxmox API password (**secret**)        |
+## Security
 
-`proxmox_url` and `proxmox_user` can be set in `group_vars/all.yml` or passed with `-e`.  
-`proxmox_password` **must** be stored in Semaphore Variable Groups or encrypted with `ansible-vault` — never committed in plain text.
-
-### 3. Test the inventory locally
-
-```bash
-ansible-inventory -i inventory/proxmox.yml --list
-```
-
-### 4. Configure it in Semaphore UI
-
-1. Go to **Inventory** → **New Inventory**.
-2. Set **Type** to **File**.
-3. Set the path to `inventory/proxmox.yml`.
-4. Pass `proxmox_url`, `proxmox_user`, and `proxmox_password` via a **Variable Group** linked to the template.
-
-## Semaphore UI
-
-1. Add this repository as a **Project** in Semaphore UI.
-2. Configure an **Inventory** pointing to `inventory/hosts.ini` (static) or `inventory/proxmox.yml` (dynamic).
-3. Create **Task Templates** for each playbook (`common.yml`, `updates.yml`, `docker.yml`).
-4. Use **Schedules** for automated recurring updates.
-
-## Tags
-
-Each play is tagged for selective execution:
-
-| Tag       | Scope                         |
-|-----------|-------------------------------|
-| `common`  | Common configuration tasks    |
-| `updates` | System package update tasks   |
-| `docker`  | Docker installation tasks     |
-
-```bash
-# Run only tasks tagged 'common'
-ansible-playbook -i inventory/hosts.ini playbooks/common.yml --tags common
-```
+The Proxmox API token should only have the permissions required for the operations you intend to expose. QEMU Guest Agent command execution effectively provides administrative command execution inside the selected guest when the guest agent runs with its normal privileges, so protect the Semaphore project, API token and task templates accordingly.
