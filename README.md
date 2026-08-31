@@ -82,12 +82,14 @@ localhost ansible_connection=local
 
 The playbook `playbooks/proxmox-refresh-semaphore-vm-list.yml` discovers the current cluster state and automatically refreshes Semaphore templates that target Proxmox guests. A template is selected when either it already contains a `target_vms` survey variable or its playbook path starts with `playbooks/proxmox-`. Internal controller/test playbooks such as the refresh playbook itself and `proxmox-test.yml` are excluded.
 
-For every matching template, the refresh playbook regenerates and places these selectors first while preserving all other template-specific survey variables:
+For every matching template, the refresh playbook regenerates and places these selectors first:
 
 - **Nœud Proxmox** (`target_node`): `Tout le cluster` plus every discovered node.
 - **Cible** (`target_vms`): `Toutes les VM`, discovered Proxmox tag groups, then individual VMs displayed as `Name [VMID id] (Node)`.
 
-A new Semaphore template pointing to a Proxmox guest playbook therefore does not need placeholder selector values. The next refresh automatically creates/updates `target_node` and `target_vms`, while leaving variables such as `guest_command` or confirmations intact.
+Template-specific survey variables can also be managed by the refresh logic when their exact Semaphore representation matters. For `playbooks/proxmox-command.yml`, the refresh recreates `guest_command` as a required text variable and `command_confirmation` as a required enum whose value is `EXECUTE`. Both are explicitly targeted as normal Ansible variables rather than process environment variables.
+
+A new Semaphore template pointing to a Proxmox guest playbook therefore does not need placeholder selector values. The next refresh automatically creates/updates `target_node` and `target_vms`; template-specific fields can be defined centrally in the refresh helper when needed.
 
 Run the refresh playbook after adding a new Proxmox template, adding/removing/migrating VMs, changing VMIDs/tags, or changing cluster nodes. It can also be scheduled in Semaphore.
 
