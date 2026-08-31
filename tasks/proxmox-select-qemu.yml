@@ -30,7 +30,7 @@
   ansible.builtin.assert:
     that:
       - target_selector | length > 0
-    fail_msg: "Set target_vms to a VM name, comma-separated VM names, tag:<tag>, or all."
+    fail_msg: "Set target_vms to vmid:<id>, tag:<tag>, or all."
 
 - name: Normalize node selector
   ansible.builtin.set_fact:
@@ -60,15 +60,19 @@
     - target_selector | lower is match('^tag:')
     - wanted_tag in vm_tags
 
-- name: Select virtual machines by name
+- name: Select virtual machine by VMID
   ansible.builtin.set_fact:
     selected_vms: >-
       {{ proxmox_info.proxmox_vms
-         | selectattr('name', 'in', target_selector.split(',') | map('trim') | list)
+         | selectattr('vmid', 'equalto', target_selector[5:] | int)
          | list }}
-  when:
-    - target_selector | lower != 'all'
-    - not (target_selector | lower is match('^tag:'))
+  when: target_selector | lower is match('^vmid:[0-9]+$')
+
+- name: Reject unsupported target selector
+  ansible.builtin.assert:
+    that:
+      - target_selector | lower == 'all' or target_selector | lower is match('^tag:') or target_selector | lower is match('^vmid:[0-9]+$')
+    fail_msg: "Unsupported target '{{ target_selector }}'. Use vmid:<id>, tag:<tag>, or all."
 
 - name: Filter selected virtual machines by Proxmox node
   ansible.builtin.set_fact:
@@ -84,8 +88,9 @@
 
 - name: Add selected VMs to temporary Ansible inventory
   ansible.builtin.add_host:
-    name: "{{ item.name }}"
+    name: "{{ item.name }}-vmid-{{ item.vmid }}"
     groups: proxmox_targets
+    display_vm_name: "{{ item.name }}"
     ansible_connection: community.proxmox.proxmox_qemu_api
     proxmox_vmid: "{{ item.vmid }}"
     proxmox_node: "{{ item.node }}"
@@ -98,4 +103,6 @@
 
 - name: Show selected VMs
   ansible.builtin.debug:
-    msg: "Selected on {{ effective_node_selector }}: {{ selected_vms | map(attribute='name') | list | join(', ') }}"
+    msg: >-
+      Selected on {{ effective_node_selector }}:
+      {{ selected_vms | map(attribute='name') | zip(selected_vms | map(attribute='vmid')) | map('join', ' [VMID ') | map('regex_replace', '$', ']') | list | join(', ') }}
