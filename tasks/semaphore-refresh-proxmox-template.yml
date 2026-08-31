@@ -1,12 +1,39 @@
 ---
-- name: Preserve non-Proxmox surveys for {{ target_template.name }}
+- name: Preserve non-managed surveys for {{ target_template.name }}
   ansible.builtin.set_fact:
     preserved_survey_vars: >-
       {{ target_template.survey_vars | default([])
          | rejectattr('name', 'equalto', semaphore_survey_var_name)
          | rejectattr('name', 'equalto', 'target_vm')
          | rejectattr('name', 'equalto', semaphore_node_survey_var_name)
+         | rejectattr('name', 'equalto', 'guest_command')
+         | rejectattr('name', 'equalto', 'command_confirmation')
          | list }}
+
+- name: Initialize template-specific surveys for {{ target_template.name }}
+  ansible.builtin.set_fact:
+    template_specific_surveys: []
+
+- name: Define command surveys for {{ target_template.name }}
+  ansible.builtin.set_fact:
+    template_specific_surveys:
+      - name: guest_command
+        title: "Commande"
+        description: "Commande à exécuter dans la VM via QEMU Guest Agent."
+        required: true
+        type: text
+        target: ""
+      - name: command_confirmation
+        title: "Confirmation"
+        description: "Confirmation explicite avant exécution de la commande."
+        required: true
+        type: enum
+        target: ""
+        values:
+          - name: "Exécuter"
+            value: "EXECUTE"
+        default_value: "EXECUTE"
+  when: target_template.playbook == 'playbooks/proxmox-command.yml'
 
 - name: Update Proxmox surveys for {{ target_template.name }}
   ansible.builtin.uri:
@@ -19,6 +46,6 @@
     body_format: json
     body: >-
       {{ target_template
-         | combine({'survey_vars': [refreshed_node_survey, refreshed_target_survey] + preserved_survey_vars}) }}
+         | combine({'survey_vars': [refreshed_node_survey, refreshed_target_survey] + template_specific_surveys + preserved_survey_vars}) }}
     status_code: [200, 204]
   no_log: true
