@@ -8,7 +8,7 @@ Ansible automation for managing **Proxmox VE QEMU virtual machines without SSH**
 Semaphore UI
     |
     v
-Ansible
+Ansible + community.proxmox
     |
     v
 Proxmox VE API
@@ -20,72 +20,79 @@ QEMU Guest Agent
 Virtual machines
 ```
 
-The Proxmox API is used as the management plane. Commands are executed inside virtual machines through QEMU Guest Agent, so managed VMs do not need to expose SSH or be reachable directly from Semaphore.
+The project uses the maintained `community.proxmox` collection instead of implementing Proxmox REST calls manually.
+
+`community.proxmox.proxmox_vm_info` is used for VM discovery and `community.proxmox.proxmox_qemu_api` is the Ansible connection plugin used to execute normal Ansible tasks inside Linux QEMU guests through QEMU Guest Agent. Managed VMs do not need SSH access or direct network connectivity from Semaphore.
 
 ## Requirements
 
 - Proxmox VE
-- Ansible
-- Semaphore UI (optional, but recommended)
-- a Proxmox API token
-- QEMU Guest Agent installed, running and enabled on managed VMs
+- Ansible Core 2.17+
+- `community.proxmox` 2.0+
+- `proxmoxer` 2.3+
+- `requests`
+- QEMU Guest Agent installed, enabled and running in managed Linux VMs
+- a Proxmox API token with the required Guest Agent permissions
 
-Install the required Ansible collections with:
+Install the Ansible collection with:
 
 ```bash
 ansible-galaxy collection install -r requirements.yml
 ```
 
+The Ansible controller also needs the Python dependencies required by `community.proxmox`, notably `proxmoxer>=2.3.0` and `requests`.
+
 ## Configuration
 
-The project uses the following environment variables:
+Environment variables:
 
-| Variable | Description |
-| --- | --- |
-| `PROXMOX_HOST` | Proxmox hostname or IP |
-| `PROXMOX_NODE` | Proxmox node name |
-| `PROXMOX_TOKEN_ID` | Proxmox API token ID |
-| `PROXMOX_TOKEN_SECRET` | Proxmox API token secret |
+| Variable | Required | Description |
+| --- | --- | --- |
+| `PROXMOX_HOST` | yes | Proxmox API hostname or IP |
+| `PROXMOX_TOKEN_ID` | yes | Proxmox API token ID |
+| `PROXMOX_TOKEN_SECRET` | yes | Proxmox API token secret |
+| `PROXMOX_NODE` | no | Restrict discovery to one Proxmox node |
+| `PROXMOX_VERIFY_SSL` | no | Validate the Proxmox TLS certificate; defaults to `false` in this project |
 
-Do not commit API secrets to the repository.
+Secrets must stay in Semaphore/environment configuration and must never be committed to Git.
 
-## Semaphore UI
+## VM selection
 
-Because Ansible communicates with Proxmox rather than directly with the VMs, a simple local inventory is sufficient:
+Playbooks that act on guests use the common `target_vms` selector.
+
+Supported forms:
+
+```text
+Media
+aVM,anotherVM
+all
+tag:debian
+tag:infra
+```
+
+Proxmox tags are therefore the preferred way to create dynamic groups without maintaining a separate Ansible inventory.
+
+The reusable selection logic lives in `tasks/proxmox-select-qemu.yml`.
+
+## Semaphore
+
+A minimal local inventory is sufficient for the discovery phase:
 
 ```ini
 [local]
 localhost ansible_connection=local
 ```
 
-Store the `PROXMOX_*` variables in a Semaphore Variable Group and attach it to the templates that use this repository.
+Store the `PROXMOX_*` values in a Semaphore Variable Group.
 
-Some playbooks can optionally accept:
-
-```text
-target_vm
-```
-
-This allows a specific VM to be selected from Semaphore without modifying the playbook.
-
-## Project structure
-
-```text
-ansible-infra/
-├── playbooks/        # Proxmox and VM automation
-├── ansible.cfg
-├── requirements.yml
-└── README.md
-```
-
-New automation should keep the same principle: **Semaphore → Proxmox API → QEMU Guest Agent**, without introducing direct SSH access to managed VMs.
+For playbooks using VM selection, expose `target_vms` as a Survey variable. Commands or other playbook-specific parameters can be exposed as additional Survey variables.
 
 ## Security
 
-The Proxmox API token provides access to the automation layer and must be protected accordingly. Sensitive API calls should use `no_log: true` when appropriate so credentials are not exposed in Ansible or Semaphore output.
+The Proxmox API token is the automation trust boundary. On Proxmox VE 9+, command execution through the QEMU Guest Agent requires the appropriate `VM.GuestAgent.*` privileges; `VM.GuestAgent.Unrestricted` covers command execution and Guest Agent operations.
 
-QEMU Guest Agent commands may execute with root privileges inside a VM, so the Proxmox API token should only receive the permissions required by the automation.
+The generic command playbook is intended for deliberate one-off administration. Recurrent or sensitive operations should remain dedicated, version-controlled playbooks.
 
 ## Scope
 
-The project currently focuses on QEMU virtual machines. LXC support may be added separately in the future.
+The QEMU API connection plugin currently targets Linux QEMU guests. Appliances such as OPNsense or Home Assistant OS should not automatically be assumed compatible with Linux/Debian playbooks. Use Proxmox tags to target appropriate guests.
