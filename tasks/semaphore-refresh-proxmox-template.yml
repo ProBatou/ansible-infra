@@ -1,0 +1,36 @@
+---
+- name: Read Semaphore template {{ target_template.name }}
+  ansible.builtin.uri:
+    url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ target_template.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ semaphore_api_token }}"
+      Accept: application/json
+    return_content: true
+    status_code: 200
+  register: semaphore_target_template
+  no_log: true
+
+- name: Preserve non-Proxmox surveys for {{ target_template.name }}
+  ansible.builtin.set_fact:
+    preserved_survey_vars: >-
+      {{ semaphore_target_template.json.survey_vars | default([])
+         | rejectattr('name', 'equalto', semaphore_survey_var_name)
+         | rejectattr('name', 'equalto', 'target_vm')
+         | rejectattr('name', 'equalto', semaphore_node_survey_var_name)
+         | list }}
+
+- name: Update Proxmox surveys for {{ target_template.name }}
+  ansible.builtin.uri:
+    url: "{{ semaphore_url }}/api/project/{{ semaphore_project_id }}/templates/{{ target_template.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ semaphore_api_token }}"
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body: >-
+      {{ semaphore_target_template.json
+         | combine({'survey_vars': [refreshed_node_survey, refreshed_target_survey] + preserved_survey_vars}) }}
+    status_code: [200, 204]
+  no_log: true
