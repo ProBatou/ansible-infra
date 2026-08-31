@@ -1,9 +1,0 @@
----
-- name: Apply system updates to all hosts
-  hosts: all
-  become: true
-  gather_facts: true
-  tags: updates
-
-  roles:
-    - role: updates
