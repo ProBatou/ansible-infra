@@ -1,16 +1,17 @@
 # ansible-infra
 
-Ansible playbooks designed for Semaphore UI to manage Proxmox VE virtual machines through the Proxmox API and QEMU Guest Agent.
+Ansible playbooks for managing **Proxmox VE QEMU virtual machines without SSH**.
 
-No SSH access to managed VMs is required for the current playbooks.
-
-## Architecture
+The control path is deliberately simple:
 
 ```text
 Semaphore UI
     |
     v
-Proxmox API
+Ansible on localhost
+    |
+    v
+Proxmox VE API
     |
     v
 QEMU Guest Agent
@@ -19,110 +20,194 @@ QEMU Guest Agent
 Virtual machine
 ```
 
-The Ansible controller itself only needs to run the playbooks locally. Commands inside VMs are executed through Proxmox `agent/exec`.
+Commands are sent through the Proxmox API to QEMU Guest Agent. Managed VMs therefore do not need to expose SSH to the Ansible/Semaphore host and do not need to exist in an Ansible host inventory.
+
+> [!IMPORTANT]
+> This repository currently targets **QEMU virtual machines**. LXC containers are not managed by these playbooks.
+
+## Why this approach?
+
+Traditional Ansible commonly connects directly to every managed host over SSH. This project instead uses Proxmox as the management plane.
+
+That means:
+
+- no SSH credentials for managed VMs;
+- no VM IP addresses in the repository;
+- no SSH inventory to maintain;
+- commands execute as root through QEMU Guest Agent;
+- VM discovery is performed directly through the Proxmox API;
+- Semaphore only needs network access to the Proxmox API.
 
 ## Requirements
 
-- Proxmox VE with API access
-- QEMU Guest Agent installed, enabled and running in VMs that need guest commands
-- Ansible / Semaphore UI
-- Collections from `requirements.yml`
+### Control side
 
-## Proxmox API variables
+- Ansible
+- Semaphore UI is optional but recommended
+- network access to the Proxmox VE API (`8006/tcp`)
+- a Proxmox API token with the permissions required for VM discovery and QEMU Guest Agent commands
 
-Configure these environment variables in Semaphore, preferably through a Variable Group:
+Install the Ansible collections with:
 
-| Variable | Description |
-| --- | --- |
-| `PROXMOX_HOST` | Proxmox host name or IP reachable by Semaphore |
-| `PROXMOX_NODE` | Proxmox node name |
-| `PROXMOX_TOKEN_ID` | API token ID |
-| `PROXMOX_TOKEN_SECRET` | API token secret |
-| `PROXMOX_VERIFY_SSL` | Optional. `true` to validate the Proxmox TLS certificate, otherwise defaults to `false` where supported |
+```bash
+ansible-galaxy collection install -r requirements.yml
+```
 
-Do not commit API secrets to this repository.
+### Proxmox / VM side
 
-## Semaphore inventory
+For commands executed inside a VM:
 
-The playbooks run on the Ansible controller itself, so a minimal Semaphore static inventory is enough:
+1. QEMU Guest Agent must be installed in the guest;
+2. the agent service must be running;
+3. QEMU Guest Agent support must be enabled for the VM in Proxmox.
+
+The API-only discovery test does not require a working guest agent.
+
+## Configuration
+
+The playbooks read Proxmox credentials from environment variables:
+
+| Variable | Required | Description |
+| --- | :---: | --- |
+| `PROXMOX_HOST` | yes | Proxmox hostname or IP, without `https://` or port |
+| `PROXMOX_NODE` | yes | Proxmox node name |
+| `PROXMOX_TOKEN_ID` | yes | API token ID, for example `user@pam!semaphore` |
+| `PROXMOX_TOKEN_SECRET` | yes | API token secret |
+
+Never commit the token secret to this repository.
+
+TLS certificate validation is currently disabled in the playbooks to support self-signed/private Proxmox installations. For an Internet-facing or production deployment, trusting the Proxmox CA and enabling certificate validation is preferable.
+
+## Semaphore UI
+
+A minimal Semaphore configuration uses a local inventory because Ansible itself does not connect to the VMs:
 
 ```ini
 [local]
 localhost ansible_connection=local
 ```
 
-No inventory of VM IP addresses is required.
+Create a Variable Group containing the four `PROXMOX_*` variables above and attach it to the task templates.
+
+Recommended template settings:
+
+| Setting | Value |
+| --- | --- |
+| Repository | this repository |
+| Inventory | local inventory |
+| Variable Group | Proxmox API credentials |
+
+### Selecting a VM
+
+Guest-oriented playbooks accept the optional Ansible variable:
+
+```text
+target_vm
+```
+
+For example, in a Semaphore Survey you can expose `target_vm` as a string field.
+
+If `target_vm` is omitted, the test/check playbooks select the first available QEMU VM by VMID. This makes initial validation possible without editing the repository.
 
 ## Playbooks
 
 ### `playbooks/proxmox-test.yml`
 
-Read-only API connectivity test. Lists QEMU VMs discovered on the configured Proxmox node.
+Tests authentication and communication with the Proxmox API and lists QEMU virtual machines.
+
+Use this first. It isolates API/token problems from QEMU Guest Agent problems.
 
 ### `playbooks/proxmox-agent-test.yml`
 
-Tests whether QEMU Guest Agent responds on a VM.
+Selects a VM and verifies that QEMU Guest Agent responds.
 
-Optional extra variable:
+This confirms the path:
 
-```yaml
-target_vm: MyVM
+```text
+Semaphore -> Proxmox API -> QEMU Guest Agent
 ```
-
-If `target_vm` is omitted, the playbook selects the first VM by VMID.
 
 ### `playbooks/proxmox-guest-exec-test.yml`
 
-Runs a read-only command through QEMU Guest Agent and reports the guest user, hostname and operating system.
+Executes a harmless command inside the selected VM through the Proxmox `agent/exec` endpoint and waits for completion with `exec-status`.
 
-Optional extra variable:
-
-```yaml
-target_vm: MyVM
-```
-
-If omitted, the first VM by VMID is selected.
+It proves that commands can actually be executed inside the guest without SSH.
 
 ### `playbooks/proxmox-apt-check.yml`
 
-For Debian/Ubuntu guests, refreshes APT metadata and reports:
+For Debian/Ubuntu guests, this playbook:
 
-- guest hostname
-- number of upgradable packages
-- whether a reboot is required
+- checks that `apt-get` is available;
+- runs `apt-get update`;
+- counts packages with available upgrades;
+- reports whether `/var/run/reboot-required` exists;
+- does **not** install upgrades.
 
-It does not install upgrades.
-
-Optional extra variable:
-
-```yaml
-target_vm: MyVM
-```
-
-If omitted, the first VM by VMID is selected. The selected guest must provide `apt-get` and QEMU Guest Agent.
-
-## Semaphore template example
-
-For an APT check template:
+Example result:
 
 ```text
-Name: Proxmox - APT Check
-Repository: this repository
-Playbook: playbooks/proxmox-apt-check.yml
-Inventory: local inventory using ansible_connection=local
-Variable Group: Proxmox API credentials
+HOSTNAME=my-vm
+UPGRADABLE=4
+REBOOT_REQUIRED=no
 ```
 
-A Semaphore survey variable named `target_vm` can be added to select the VM when starting the task. It can remain optional if automatic first-VM selection is desired.
+## Suggested validation order
 
-## Install Ansible collections
+When deploying the project on a new Proxmox environment, run:
 
-```bash
-ansible-galaxy collection install -r requirements.yml
+```text
+1. proxmox-test.yml
+       |
+       v
+2. proxmox-agent-test.yml
+       |
+       v
+3. proxmox-guest-exec-test.yml
+       |
+       v
+4. proxmox-apt-check.yml
 ```
 
-Semaphore can also install `requirements.yml` automatically when the repository is cloned for a task.
+This makes failures easy to locate: API access, Guest Agent availability, command execution, then operating-system maintenance.
 
-## Security
+## Repository layout
 
-The Proxmox API token should only have the permissions required for the operations you intend to expose. QEMU Guest Agent command execution effectively provides administrative command execution inside the selected guest when the guest agent runs with its normal privileges, so protect the Semaphore project, API token and task templates accordingly.
+```text
+ansible-infra/
+├── playbooks/
+│   ├── proxmox-test.yml
+│   ├── proxmox-agent-test.yml
+│   ├── proxmox-guest-exec-test.yml
+│   └── proxmox-apt-check.yml
+├── .gitignore
+├── ansible.cfg
+├── requirements.yml
+└── README.md
+```
+
+## Security model
+
+The Proxmox API token is the sensitive credential in this architecture. Keep it in Semaphore's secret/environment storage or another secrets manager, never in Git.
+
+The current playbooks mark API tasks containing authorization headers with `no_log: true` so token values are not printed in normal Ansible output.
+
+Because QEMU Guest Agent command execution can run commands as root inside guests, grant the API token only the permissions required for this automation and protect access to Semaphore accordingly.
+
+## Current scope
+
+Implemented:
+
+- Proxmox API authentication test;
+- QEMU VM discovery;
+- optional VM selection by name;
+- automatic fallback to the first QEMU VM;
+- QEMU Guest Agent health test;
+- guest command execution and status polling;
+- Debian/Ubuntu APT update check;
+- reboot-required detection.
+
+Planned maintenance features can build on the same API/QEMU Guest Agent transport without introducing SSH.
+
+## License
+
+No license has been selected yet. Until a license file is added, normal copyright rules apply.
