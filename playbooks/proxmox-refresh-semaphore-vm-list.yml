@@ -69,8 +69,12 @@
     - name: Collect Proxmox tags
       ansible.builtin.set_fact:
         generated_tags: >-
-          {{ (generated_tags + (item.config.tags | default('') | split(';')))
-             | map('trim') | reject('equalto', '') | unique | list }}
+          {{ (generated_tags +
+              (((item.tags | default(item.config.tags | default(''), true)) | string).split(';')))
+             | map('trim')
+             | reject('equalto', '')
+             | unique
+             | list }}
       loop: "{{ proxmox_info.proxmox_vms }}"
       loop_control:
         label: "{{ item.name }}"
@@ -138,4 +142,5 @@
           survey_variable: "{{ semaphore_survey_var_name }}"
           vm_count: "{{ proxmox_info.proxmox_vms | length }}"
           tag_count: "{{ generated_tags | length }}"
+          tags: "{{ generated_tags | sort }}"
           choices: "{{ generated_vm_values | map(attribute='value') | list }}"
