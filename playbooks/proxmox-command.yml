@@ -13,15 +13,24 @@
     target_node_selector: "{{ target_node | default('all') | trim }}"
 
   tasks:
-    - name: Validate command
+    - name: Validate command request
       ansible.builtin.assert:
         that:
           - guest_command is defined
           - guest_command | trim | length > 0
-        fail_msg: "Set guest_command to the command to execute."
+          - command_confirmation | default('') | trim == 'EXECUTE'
+        fail_msg: "Set guest_command and confirm execution with command_confirmation=EXECUTE."
 
     - name: Select target VMs
       ansible.builtin.include_tasks: ../tasks/proxmox-select-qemu.yml
+
+    - name: Show command execution plan
+      ansible.builtin.debug:
+        msg:
+          target_node: "{{ target_node_selector }}"
+          target: "{{ target_selector }}"
+          virtual_machines: "{{ selected_vms | map(attribute='name') | list }}"
+          command: "{{ guest_command }}"
 
 - name: Execute command through Proxmox QEMU Guest Agent
   hosts: proxmox_targets
@@ -39,7 +48,9 @@
     - name: Show command result
       ansible.builtin.debug:
         msg:
-          vm: "{{ inventory_hostname }}"
+          vm: "{{ display_vm_name | default(inventory_hostname) }}"
+          vmid: "{{ proxmox_vmid }}"
+          node: "{{ proxmox_node }}"
           rc: "{{ command_result.rc }}"
           stdout: "{{ command_result.stdout }}"
           stderr: "{{ command_result.stderr }}"
