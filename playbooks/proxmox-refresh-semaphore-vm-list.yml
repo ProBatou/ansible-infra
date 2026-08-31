@@ -9,7 +9,6 @@
     proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
     proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
     proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
-
     semaphore_url: "{{ lookup('env', 'SEMAPHORE_URL') | default('http://127.0.0.1:3000', true) | regex_replace('/+$', '') }}"
     semaphore_api_token: "{{ lookup('env', 'SEMAPHORE_API_TOKEN') }}"
     semaphore_project_id: "{{ lookup('env', 'SEMAPHORE_PROJECT_ID') | default('2', true) }}"
@@ -26,9 +25,7 @@
           - proxmox_token_secret | length > 0
           - "'!' in proxmox_token_id"
           - semaphore_api_token | length > 0
-        fail_msg: >-
-          Missing Proxmox configuration or SEMAPHORE_API_TOKEN.
-          PROXMOX_TOKEN_ID must use user@realm!token format.
+        fail_msg: "Missing Proxmox configuration or SEMAPHORE_API_TOKEN. PROXMOX_TOKEN_ID must use user@realm!token format."
 
     - name: Derive Proxmox API user and token name
       ansible.builtin.set_fact:
@@ -51,52 +48,41 @@
     - name: Initialize generated survey data
       ansible.builtin.set_fact:
         generated_vm_values:
-          - name: "Toutes les VM"
-            value: "all"
+          - {name: "Toutes les VM", value: "all"}
         generated_node_values:
-          - name: "Tout le cluster"
-            value: "all"
+          - {name: "Tout le cluster", value: "all"}
         generated_tags: []
         generated_nodes: "{{ proxmox_info.proxmox_vms | map(attribute='node') | unique | sort | list }}"
 
     - name: Add Proxmox nodes to node survey values
       ansible.builtin.set_fact:
-        generated_node_values: >-
-          {{ generated_node_values + [
-            {'name': item, 'value': item}
-          ] }}
+        generated_node_values: "{{ generated_node_values + [{'name': item, 'value': item}] }}"
       loop: "{{ generated_nodes }}"
 
     - name: Collect Proxmox tags
       ansible.builtin.set_fact:
         generated_tags: >-
-          {{ (generated_tags +
-              (((item.tags | default(item.config.tags | default(''), true)) | string).split(';')))
-             | map('trim')
-             | reject('equalto', '')
-             | unique
-             | list }}
+          {{ (generated_tags + (((item.tags | default(item.config.tags | default(''), true)) | string).split(';')))
+             | map('trim') | reject('equalto', '') | unique | list }}
       loop: "{{ proxmox_info.proxmox_vms }}"
       loop_control:
         label: "{{ item.name }}"
 
     - name: Add Proxmox tag groups to survey values
       ansible.builtin.set_fact:
-        generated_vm_values: >-
-          {{ generated_vm_values + [
-            {'name': 'Groupe: ' ~ item, 'value': 'tag:' ~ item}
-          ] }}
+        generated_vm_values: "{{ generated_vm_values + [{'name': 'Groupe: ' ~ item, 'value': 'tag:' ~ item}] }}"
       loop: "{{ generated_tags | sort }}"
 
-    - name: Add VM names to generated survey values
+    - name: Add VMID targets to generated survey values
       ansible.builtin.set_fact:
         generated_vm_values: >-
-          {{ generated_vm_values + [
-            {'name': item.name ~ ' (' ~ item.node ~ ')', 'value': item.name}
-          ] }}
+          {{ generated_vm_values + [{
+            'name': item.name ~ ' [VMID ' ~ (item.vmid | string) ~ '] (' ~ item.node ~ ')',
+            'value': 'vmid:' ~ (item.vmid | string)
+          }] }}
       loop: "{{ proxmox_info.proxmox_vms | sort(attribute='name') }}"
       loop_control:
-        label: "{{ item.name }}"
+        label: "{{ item.name }} [VMID {{ item.vmid }}]"
 
     - name: Read Semaphore target template
       ansible.builtin.uri:
@@ -116,8 +102,7 @@
           {{ semaphore_template.json.survey_vars | default([])
              | rejectattr('name', 'equalto', semaphore_survey_var_name)
              | rejectattr('name', 'equalto', 'target_vm')
-             | rejectattr('name', 'equalto', semaphore_node_survey_var_name)
-             | list }}
+             | rejectattr('name', 'equalto', semaphore_node_survey_var_name) | list }}
 
     - name: Build refreshed node survey variable
       ansible.builtin.set_fact:
@@ -135,7 +120,7 @@
         refreshed_target_survey:
           name: "{{ semaphore_survey_var_name }}"
           title: "Cible"
-          description: "VM ou groupe Proxmox. La sélection est ensuite filtrée par le nœud choisi."
+          description: "VM identifiée par VMID ou groupe Proxmox. La sélection est filtrée par le nœud choisi."
           required: true
           type: enum
           values: "{{ generated_vm_values }}"
@@ -150,12 +135,8 @@
           Accept: application/json
           Content-Type: application/json
         body_format: json
-        body: >-
-          {{ semaphore_template.json
-             | combine({'survey_vars': preserved_survey_vars + [refreshed_node_survey, refreshed_target_survey]}) }}
-        status_code:
-          - 200
-          - 204
+        body: "{{ semaphore_template.json | combine({'survey_vars': preserved_survey_vars + [refreshed_node_survey, refreshed_target_survey]}) }}"
+        status_code: [200, 204]
       no_log: true
 
     - name: Show refresh result
