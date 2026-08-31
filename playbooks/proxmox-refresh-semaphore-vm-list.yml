@@ -49,22 +49,12 @@
       register: proxmox_info
       no_log: true
 
-    - name: Initialize generated survey values
+    - name: Initialize generated survey data
       ansible.builtin.set_fact:
         generated_vm_values:
           - name: "Toutes les VM"
             value: "all"
         generated_tags: []
-
-    - name: Add VM names to generated survey values
-      ansible.builtin.set_fact:
-        generated_vm_values: >-
-          {{ generated_vm_values + [
-            {'name': item.name, 'value': item.name}
-          ] }}
-      loop: "{{ proxmox_info.proxmox_vms | sort(attribute='name') }}"
-      loop_control:
-        label: "{{ item.name }}"
 
     - name: Collect Proxmox tags
       ansible.builtin.set_fact:
@@ -79,13 +69,23 @@
       loop_control:
         label: "{{ item.name }}"
 
-    - name: Add Proxmox tags to generated survey values
+    - name: Add Proxmox tag groups to survey values
       ansible.builtin.set_fact:
         generated_vm_values: >-
           {{ generated_vm_values + [
-            {'name': 'Tag: ' ~ item, 'value': 'tag:' ~ item}
+            {'name': 'Groupe: ' ~ item, 'value': 'tag:' ~ item}
           ] }}
       loop: "{{ generated_tags | sort }}"
+
+    - name: Add VM names to generated survey values
+      ansible.builtin.set_fact:
+        generated_vm_values: >-
+          {{ generated_vm_values + [
+            {'name': item.name, 'value': item.name}
+          ] }}
+      loop: "{{ proxmox_info.proxmox_vms | sort(attribute='name') }}"
+      loop_control:
+        label: "{{ item.name }}"
 
     - name: Read Semaphore target template
       ansible.builtin.uri:
