@@ -20,7 +20,6 @@
     api_user: "{{ proxmox_api_user }}"
     api_token_id: "{{ proxmox_api_token_name }}"
     api_token_secret: "{{ proxmox_token_secret }}"
-    node: "{{ proxmox_node_filter if proxmox_node_filter | length > 0 else omit }}"
     type: qemu
     config: current
     validate_certs: "{{ proxmox_verify_ssl }}"
@@ -33,6 +32,11 @@
       - target_selector | length > 0
     fail_msg: "Set target_vms to a VM name, comma-separated VM names, tag:<tag>, or all."
 
+- name: Normalize node selector
+  ansible.builtin.set_fact:
+    effective_node_selector: >-
+      {{ (target_node_selector | default('all') | trim) if (target_node_selector | default('') | trim | length > 0) else 'all' }}
+
 - name: Select all virtual machines
   ansible.builtin.set_fact:
     selected_vms: "{{ proxmox_info.proxmox_vms }}"
@@ -41,7 +45,6 @@
 - name: Initialize tag selection
   ansible.builtin.set_fact:
     selected_vms: []
-    selected_tag: "{{ target_selector[4:] | trim }}"
   when: target_selector | lower is match('^tag:')
 
 - name: Select virtual machines by Proxmox tag
@@ -49,14 +52,13 @@
     selected_vms: "{{ selected_vms + [item] }}"
   vars:
     vm_tags: >-
-      {{ ((item.tags | default(item.config.tags | default(''), true)) | string).split(';')
+      {{ (((item.tags | default(item.config.tags | default(''), true)) | string).split(';'))
          | map('trim') | reject('equalto', '') | list }}
+    wanted_tag: "{{ target_selector[4:] | trim }}"
   loop: "{{ proxmox_info.proxmox_vms }}"
-  loop_control:
-    label: "{{ item.name }}"
   when:
     - target_selector | lower is match('^tag:')
-    - selected_tag in vm_tags
+    - wanted_tag in vm_tags
 
 - name: Select virtual machines by name
   ansible.builtin.set_fact:
@@ -68,11 +70,17 @@
     - target_selector | lower != 'all'
     - not (target_selector | lower is match('^tag:'))
 
+- name: Filter selected virtual machines by Proxmox node
+  ansible.builtin.set_fact:
+    selected_vms: >-
+      {{ selected_vms | selectattr('node', 'equalto', effective_node_selector) | list }}
+  when: effective_node_selector | lower != 'all'
+
 - name: Validate selected virtual machines
   ansible.builtin.assert:
     that:
       - selected_vms | default([]) | length > 0
-    fail_msg: "No QEMU VM matches selector '{{ target_selector }}'."
+    fail_msg: "No QEMU VM matches selector '{{ target_selector }}' on node '{{ effective_node_selector }}'."
 
 - name: Add selected VMs to temporary Ansible inventory
   ansible.builtin.add_host:
@@ -90,4 +98,4 @@
 
 - name: Show selected VMs
   ansible.builtin.debug:
-    msg: "Selected: {{ selected_vms | map(attribute='name') | list | join(', ') }}"
+    msg: "Selected on {{ effective_node_selector }}: {{ selected_vms | map(attribute='name') | list | join(', ') }}"
