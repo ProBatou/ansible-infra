@@ -37,9 +37,15 @@
     effective_node_selector: >-
       {{ (target_node_selector | default('all') | trim) if (target_node_selector | default('') | trim | length > 0) else 'all' }}
 
+- name: Build node candidate list
+  ansible.builtin.set_fact:
+    candidate_vms: >-
+      {{ proxmox_info.proxmox_vms if effective_node_selector | lower == 'all'
+         else (proxmox_info.proxmox_vms | selectattr('node', 'equalto', effective_node_selector) | list) }}
+
 - name: Select all virtual machines
   ansible.builtin.set_fact:
-    selected_vms: "{{ proxmox_info.proxmox_vms }}"
+    selected_vms: "{{ candidate_vms }}"
   when: target_selector | lower == 'all'
 
 - name: Initialize tag selection
@@ -55,7 +61,9 @@
       {{ (((item.tags | default(item.config.tags | default(''), true)) | string).split(';'))
          | map('trim') | reject('equalto', '') | list }}
     wanted_tag: "{{ target_selector[4:] | trim }}"
-  loop: "{{ proxmox_info.proxmox_vms }}"
+  loop: "{{ candidate_vms }}"
+  loop_control:
+    label: "{{ item.name }} [VMID {{ item.vmid }}]"
   when:
     - target_selector | lower is match('^tag:')
     - wanted_tag in vm_tags
@@ -63,7 +71,7 @@
 - name: Select virtual machine by VMID
   ansible.builtin.set_fact:
     selected_vms: >-
-      {{ proxmox_info.proxmox_vms
+      {{ candidate_vms
          | selectattr('vmid', 'equalto', target_selector[5:] | int)
          | list }}
   when: target_selector | lower is match('^vmid:[0-9]+$')
@@ -73,12 +81,6 @@
     that:
       - target_selector | lower == 'all' or target_selector | lower is match('^tag:') or target_selector | lower is match('^vmid:[0-9]+$')
     fail_msg: "Unsupported target '{{ target_selector }}'. Use vmid:<id>, tag:<tag>, or all."
-
-- name: Filter selected virtual machines by Proxmox node
-  ansible.builtin.set_fact:
-    selected_vms: >-
-      {{ selected_vms | selectattr('node', 'equalto', effective_node_selector) | list }}
-  when: effective_node_selector | lower != 'all'
 
 - name: Validate selected virtual machines
   ansible.builtin.assert:
@@ -99,6 +101,8 @@
     proxmox_api_token_secret: "{{ proxmox_token_secret }}"
     proxmox_validate_certs: "{{ proxmox_verify_ssl }}"
   loop: "{{ selected_vms }}"
+  loop_control:
+    label: "{{ item.name }} [VMID {{ item.vmid }}] ({{ item.node }})"
   no_log: true
 
 - name: Show selected VMs
