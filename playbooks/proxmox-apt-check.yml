@@ -1,107 +1,125 @@
 ---
-- name: Check Debian updates through Proxmox QEMU Guest Agent
+- name: Select Proxmox QEMU virtual machines
   hosts: localhost
   gather_facts: false
   connection: local
 
   vars:
     proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') }}"
-    proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') }}"
+    proxmox_node_filter: "{{ lookup('env', 'PROXMOX_NODE') | default('', true) }}"
     proxmox_token_id: "{{ lookup('env', 'PROXMOX_TOKEN_ID') }}"
     proxmox_token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
     proxmox_verify_ssl: "{{ (lookup('env', 'PROXMOX_VERIFY_SSL') | default('false', true)) | bool }}"
+    target_selector: "{{ target_vms | default(target_vm | default('')) | trim }}"
 
   tasks:
-    - name: Query QEMU virtual machines
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_verify_ssl }}"
-        return_content: true
-        status_code: 200
-      register: vm_list
-      no_log: true
-
-    - name: Validate at least one VM exists
+    - name: Validate Proxmox API configuration
       ansible.builtin.assert:
         that:
-          - vm_list.json.data | length > 0
-        fail_msg: "No QEMU VM found on node {{ proxmox_node }}."
+          - proxmox_host | length > 0
+          - proxmox_token_id | length > 0
+          - proxmox_token_secret | length > 0
+        fail_msg: "Missing PROXMOX_HOST, PROXMOX_TOKEN_ID or PROXMOX_TOKEN_SECRET."
 
-    - name: Select requested VM or first VM by VMID
-      ansible.builtin.set_fact:
-        selected_vm: >-
-          {{
-            ((vm_list.json.data | selectattr('name', 'equalto', target_vm) | list | first)
-              if (target_vm is defined and target_vm | trim | length > 0)
-              else (vm_list.json.data | sort(attribute='vmid') | first))
-          }}
-
-    - name: Start apt update and count available upgrades
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ selected_vm.vmid }}/agent/exec"
-        method: POST
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        body_format: form-urlencoded
-        body:
-          command:
-            - "/bin/sh"
-            - "-lc"
-            - >-
-              set -eu;
-              if ! command -v apt-get >/dev/null 2>&1; then
-                printf 'ERROR=apt-get-not-found\n';
-                exit 20;
-              fi;
-              export DEBIAN_FRONTEND=noninteractive;
-              apt-get update >/tmp/semaphore-apt-update.log 2>&1;
-              COUNT="$(apt list --upgradable 2>/dev/null | sed '1d' | sed '/^$/d' | wc -l)";
-              printf 'HOSTNAME=%s\n' "$(hostname)";
-              printf 'UPGRADABLE=%s\n' "$COUNT";
-              if [ -e /var/run/reboot-required ]; then
-                printf 'REBOOT_REQUIRED=yes\n';
-              else
-                printf 'REBOOT_REQUIRED=no\n';
-              fi
+    - name: Query QEMU virtual machines and configuration
+      community.proxmox.proxmox_vm_info:
+        api_host: "{{ proxmox_host }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        node: "{{ proxmox_node_filter if proxmox_node_filter | length > 0 else omit }}"
+        type: qemu
+        config: current
         validate_certs: "{{ proxmox_verify_ssl }}"
-        return_content: true
-        status_code: 200
-      register: guest_exec_start
+      register: proxmox_info
       no_log: true
 
-    - name: Extract guest-exec PID
-      ansible.builtin.set_fact:
-        guest_exec_pid: "{{ guest_exec_start.json.data.pid }}"
-
-    - name: Wait for apt check to finish
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ selected_vm.vmid }}/agent/exec-status?pid={{ guest_exec_pid }}"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_verify_ssl }}"
-        return_content: true
-        status_code: 200
-      register: guest_exec_status
-      until: (guest_exec_status.json.data.exited | default(0) | int) == 1
-      retries: 120
-      delay: 1
-      no_log: true
-
-    - name: Fail if apt check failed
+    - name: Validate selector
       ansible.builtin.assert:
         that:
-          - (guest_exec_status.json.data.exitcode | int) == 0
+          - target_selector | length > 0
         fail_msg: >-
-          APT check failed inside {{ selected_vm.name }}:
-          {{ guest_exec_status.json.data['err-data'] | default(guest_exec_status.json.data['out-data'] | default('no output returned')) }}
+          Set target_vms to a VM name, comma-separated VM names, tag:<tag>, or all.
+
+    - name: Select all virtual machines
+      ansible.builtin.set_fact:
+        selected_vms: "{{ proxmox_info.proxmox_vms }}"
+      when: target_selector | lower == 'all'
+
+    - name: Select virtual machines by Proxmox tag
+      ansible.builtin.set_fact:
+        selected_vms: >-
+          {{ proxmox_info.proxmox_vms
+             | selectattr('config.tags', 'defined')
+             | selectattr('config.tags', 'search', '(^|;)' ~ (target_selector[4:] | trim) ~ '(;|$)')
+             | list }}
+      when: target_selector | lower is match('^tag:')
+
+    - name: Select virtual machines by name
+      ansible.builtin.set_fact:
+        selected_vms: >-
+          {{ proxmox_info.proxmox_vms
+             | selectattr('name', 'in', target_selector.split(',') | map('trim') | list)
+             | list }}
+      when:
+        - target_selector | lower != 'all'
+        - not (target_selector | lower is match('^tag:'))
+
+    - name: Validate selected virtual machines
+      ansible.builtin.assert:
+        that:
+          - selected_vms | default([]) | length > 0
+        fail_msg: "No QEMU VM matches selector '{{ target_selector }}'."
+
+    - name: Add selected VMs to temporary Ansible inventory
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: proxmox_targets
+        ansible_connection: community.proxmox.proxmox_qemu_api
+        proxmox_vmid: "{{ item.vmid }}"
+        proxmox_node: "{{ item.node }}"
+        proxmox_api_host: "{{ proxmox_host }}"
+        proxmox_api_token_id: "{{ proxmox_token_id }}"
+        proxmox_api_token_secret: "{{ proxmox_token_secret }}"
+        proxmox_validate_certs: "{{ proxmox_verify_ssl }}"
+      loop: "{{ selected_vms }}"
+      no_log: true
+
+    - name: Show selected VMs
+      ansible.builtin.debug:
+        msg: "Selected: {{ selected_vms | map(attribute='name') | list | join(', ') }}"
+
+- name: Check APT updates through community.proxmox QEMU API connection
+  hosts: proxmox_targets
+  gather_facts: false
+  serial: "{{ apt_serial | default(5) }}"
+  become: false
+
+  tasks:
+    - name: Verify target is Debian-family
+      ansible.builtin.command:
+        cmd: /bin/sh -c 'test -r /etc/debian_version && command -v apt-get'
+      changed_when: false
+
+    - name: Update APT cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+      changed_when: false
+
+    - name: Count available upgrades
+      ansible.builtin.shell:
+        cmd: "apt list --upgradable 2>/dev/null | sed '1d' | sed '/^$/d' | wc -l"
+      register: apt_upgradable
+      changed_when: false
+
+    - name: Check whether reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
 
     - name: Show update status
       ansible.builtin.debug:
         msg:
-          vm: "{{ selected_vm.name }}"
-          vmid: "{{ selected_vm.vmid }}"
-          result: "{{ guest_exec_status.json.data['out-data'] | default('') }}"
+          vm: "{{ inventory_hostname }}"
+          upgradable: "{{ apt_upgradable.stdout | int }}"
+          reboot_required: "{{ reboot_required.stat.exists }}"
