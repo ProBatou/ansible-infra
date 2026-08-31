@@ -92,7 +92,7 @@ Run the refresh playbook after adding/removing/migrating VMs, changing VMIDs/tag
 
 The Proxmox API token is the automation trust boundary. On Proxmox VE 9+, command execution through QEMU Guest Agent requires the appropriate `VM.GuestAgent.*` privileges; `VM.GuestAgent.Unrestricted` covers command execution and Guest Agent operations.
 
-The generic command playbook is intended for deliberate one-off administration. Recurrent or sensitive operations should remain dedicated, version-controlled playbooks.
+The generic command playbook is intended for deliberate one-off administration. It requires both a non-empty `guest_command` and `command_confirmation=EXECUTE` before any VM command is launched. The selected node, target, VM list and command are displayed before execution. Recurrent or sensitive operations should remain dedicated, version-controlled playbooks.
 
 ## Scope
 
