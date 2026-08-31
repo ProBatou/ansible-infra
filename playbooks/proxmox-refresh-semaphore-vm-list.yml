@@ -95,13 +95,17 @@
       register: semaphore_templates
       no_log: true
 
+    - name: Initialize matching template list
+      ansible.builtin.set_fact:
+        proxmox_target_templates: []
+
     - name: Select templates using Proxmox target surveys
       ansible.builtin.set_fact:
-        proxmox_target_templates: >-
-          {{ semaphore_templates.json
-             | selectattr('survey_vars', 'defined')
-             | selectattr('survey_vars', 'selectattr', 'name', 'equalto', semaphore_survey_var_name)
-             | list }}
+        proxmox_target_templates: "{{ proxmox_target_templates + [item] }}"
+      loop: "{{ semaphore_templates.json }}"
+      loop_control:
+        label: "{{ item.name | default('template ' ~ (item.id | default('?') | string)) }}"
+      when: semaphore_survey_var_name in (item.survey_vars | default([]) | map(attribute='name') | list)
 
     - name: Build refreshed node survey variable
       ansible.builtin.set_fact:
